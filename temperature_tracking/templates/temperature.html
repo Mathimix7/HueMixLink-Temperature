@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Temperature Sensors - HueMix-Link{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('temperature_tracking.static', filename='css/temperature.css') }}">
+{% endblock %}
+
+{% block content %}
+<!-- Toast Notification -->
+<div id="toast-notification" class="hidden fixed top-4 right-4 z-50 max-w-md">
+    <div id="toast-container" class="rounded-lg shadow-2xl border-l-4 border-green-500 p-4 flex items-start space-x-3 transform transition-all duration-300 ease-out bg-green-50 translate-x-full opacity-0">
+        <div class="flex-shrink-0">
+            <i id="toast-icon" class="fas fa-check-circle text-2xl text-green-600"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <p id="toast-title" class="text-sm font-semibold text-gray-900"></p>
+            <p id="toast-message" class="text-sm text-gray-700 mt-1"></p>
+        </div>
+        <button onclick="hideToast()" class="flex-shrink-0 inline-flex items-center text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-blue-600 to-blue-400 bg-clip-text text-transparent mb-1">
+                    Temperature Sensors
+                </h1>
+                <p class="text-gray-600">View and manage paired temperature sensors</p>
+            </div>
+            <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                <i class="fas fa-arrow-left mr-2"></i>Back to Home
+            </a>
+        </div>
+    </div>
+
+    <!-- Devices List -->
+    <div class="bg-white rounded-2xl shadow-lg p-6 mb-6">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xl font-semibold text-gray-800">
+                <i class="fas fa-thermometer-half mr-2 text-blue-600"></i>Available Sensors
+            </h2>
+            <button onclick="refreshSensors()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                <i id="refresh-icon" class="fas fa-sync-alt mr-2 transition-transform duration-500"></i>Refresh
+            </button>
+        </div>
+
+        <!-- Devices Table -->
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sensor Name</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">MAC Address</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Temperature</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Humidity</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Battery</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                </thead>
+                <tbody id="devices-table-body" class="bg-white divide-y divide-gray-200">
+                    <!-- Devices will be loaded here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Rename Modal -->
+<div id="rename-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeRenameModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                    <i class="fas fa-edit mr-2 text-blue-600"></i>Rename Sensor
+                </h3>
+                <div class="mt-2">
+                    <label for="device-name" class="block text-sm font-medium text-gray-700">Sensor Name</label>
+                    <input type="text" id="device-name" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="saveDeviceName()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Save
+                </button>
+                <button type="button" onclick="closeRenameModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Config Modal -->
+<div id="config-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeConfigModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">
+                        <i class="fas fa-cog mr-2 text-blue-600"></i>Configure Sensor: <span id="config-device-name" class="text-blue-600"></span>
+                    </h3>
+                    <button onclick="closeConfigModal()" class="text-gray-400 hover:text-gray-500 p-2">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div id="config-content" class="space-y-4">
+                    <label class="block text-sm font-medium text-gray-700">Enabled</label>
+                    <input type="checkbox" id="config-enabled" />
+
+                    <label class="block text-sm font-medium text-gray-700">Min Temperature (°C)</label>
+                    <input type="number" id="config-min-temp" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
+
+                    <label class="block text-sm font-medium text-gray-700">Max Temperature (°C)</label>
+                    <input type="number" id="config-max-temp" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="saveConfig()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                    Save
+                </button>
+                <button type="button" onclick="closeConfigModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeDeleteModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="sm:flex sm:items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <i class="fas fa-exclamation-triangle text-red-600"></i>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">Delete Sensor</h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500">Are you sure you want to delete "<span id="delete-device-name" class="font-semibold text-gray-900"></span>"? This action cannot be undone.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="confirmDelete()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Delete</button>
+                <button type="button" onclick="closeDeleteModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancel</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+<script src="{{ url_for('temperature_tracking.static', filename='js/temperature.js') }}"></script>
+{% endblock %}

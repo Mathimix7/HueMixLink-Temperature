@@ -1,0 +1,1 @@
+"""Temperature tracking example plugin."""

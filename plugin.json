@@ -1,0 +1,41 @@
+{
+    "id": "temperature_tracking",
+    "plugin_id": "550e8400-e29b-41d4-a716-446655440000",
+    "module": "plugins.temperature_tracking.plugin",
+    "enabled": true,
+    "devices": [
+    {
+        "device_type": 0,
+        "name": "Temperature Sensor",
+        "type": "Sensor",
+        "icon": "\ud83c\udf21\ufe0f"
+    }
+    ],
+    "ota": [
+    {
+        "device_type": 0,
+        "url": "...",
+        "version": "0.1.0"
+    }
+    ],
+    "options": {
+    "history_limit": 100,
+    "poll_interval_seconds": 30
+    },
+    "metadata": {
+    "author": "HueMix Team",
+    "license": "MIT"
+    },
+    "home_box": {
+    "name": "Temperature Sensors",
+    "description": "View temperature history",
+    "icon": "fa-temperature-half",
+    "color": "#00a6f4",
+    "link": "/plugins/temperature"
+    },
+    "device_capabilities": {
+    "rename_endpoint": "/plugins/temperature/api/devices/{device_id}/rename",
+    "delete_endpoint": "/plugins/temperature/api/devices/{device_id}",
+    "configure_endpoint": "/plugins/temperature"
+    }
+}

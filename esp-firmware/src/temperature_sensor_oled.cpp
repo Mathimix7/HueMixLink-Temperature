@@ -1358,6 +1358,7 @@ void setup() {
   blinkLed(5, 100, 100);
 
   if (HOME_ID != 0) {
+    sendHello(false);
     requestTimeSync();
     lastTimeSyncAttemptMs = millis();
   }
@@ -1420,8 +1421,10 @@ void loop() {
         renderStatus("Searching...", "Sending HELLO");
         sendHello(true);
         blinkLed(1, 200, 0);
+      } else {
+        Serial.println("[TEMP-OLED] Reset button pressed. Sending HELLO");
+        sendHello(false);
       }
-      // Paired + button tap during normal operation: ignored (lightstrip behavior)
     }
   }
 

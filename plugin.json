@@ -20,7 +20,7 @@
     "ota": [
     {
         "device_type": 0,
-        "name": "temperature_sensor"
+        "name": "oled_temperature_sensor"
     },
     {
         "device_type": 1,
@@ -29,24 +29,19 @@
     ],
     "options": {},
     "metadata": {
-    "author": "HueMix Team",
-    "license": "MIT",
-    "source_repo": "https://github.com/Mathimix7/HueMixLink-Temperature",
-    "source_branch": "default",
-    "installed_at": "2026-05-26T18:51:24.461788+00:00",
-    "manifest_source": "plugin.json",
-    "has_requirements": true
+        "author": "Mathimix",
+        "license": "MIT"
     },
     "home_box": {
-    "name": "Temperature Sensors",
-    "description": "View temperature history",
-    "icon": "fa-temperature-half",
-    "color": "#00a6f4",
-    "link": "/plugins/temperature"
+        "name": "Temperature Sensors",
+        "description": "View temperature history",
+        "icon": "fa-temperature-half",
+        "color": "#00a6f4",
+        "link": "/plugins/temperature"
     },
     "device_capabilities": {
-    "rename_endpoint": "/plugins/temperature/api/devices/{device_id}/rename",
-    "delete_endpoint": "/plugins/temperature/api/devices/{device_id}",
-    "configure_endpoint": "/plugins/temperature"
+        "rename_endpoint": "/plugins/temperature/api/devices/{device_id}/rename",
+        "delete_endpoint": "/plugins/temperature/api/devices/{device_id}",
+        "configure_endpoint": "/plugins/temperature"
     }
 }

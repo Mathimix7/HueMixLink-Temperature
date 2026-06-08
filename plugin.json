@@ -9,22 +9,33 @@
         "name": "Temperature Sensor",
         "type": "Sensor",
         "icon": "\ud83c\udf21\ufe0f"
+    },
+    {
+        "device_type": 1,
+        "name": "Battery Temp Sensor",
+        "type": "Sensor",
+        "icon": "\ud83c\udf21\ufe0f"
     }
     ],
     "ota": [
     {
         "device_type": 0,
-        "url": "...",
-        "version": "0.1.0"
+        "name": "temperature_sensor"
+    },
+    {
+        "device_type": 1,
+        "name": "battery_temperature_sensor"
     }
     ],
-    "options": {
-    "history_limit": 100,
-    "poll_interval_seconds": 30
-    },
+    "options": {},
     "metadata": {
     "author": "HueMix Team",
-    "license": "MIT"
+    "license": "MIT",
+    "source_repo": "https://github.com/Mathimix7/HueMixLink-Temperature",
+    "source_branch": "default",
+    "installed_at": "2026-05-26T18:51:24.461788+00:00",
+    "manifest_source": "plugin.json",
+    "has_requirements": true
     },
     "home_box": {
     "name": "Temperature Sensors",

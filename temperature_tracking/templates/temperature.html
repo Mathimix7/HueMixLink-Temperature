@@ -33,9 +33,14 @@
                 </h1>
                 <p class="text-gray-600">View and manage paired temperature sensors</p>
             </div>
-            <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
-                <i class="fas fa-arrow-left mr-2"></i>Back to Home
-            </a>
+            <div class="flex items-center space-x-3">
+                <a href="{{ url_for('temperature_tracking.graphs') }}" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors inline-flex items-center">
+                    <i class="fas fa-chart-line mr-2"></i>Graphs
+                </a>
+                <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                    <i class="fas fa-arrow-left mr-2"></i>Back to Home
+                </a>
+            </div>
         </div>
     </div>
 
@@ -103,7 +108,7 @@
     <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
         <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeConfigModal()"></div>
         <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
-        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full">
             <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="text-lg leading-6 font-medium text-gray-900">
@@ -114,18 +119,100 @@
                     </button>
                 </div>
                 <div id="config-content" class="space-y-4">
-                    <label class="block text-sm font-medium text-gray-700">Enabled</label>
-                    <input type="checkbox" id="config-enabled" />
+                    <!-- Note for battery sensors -->
+                    <div id="config-battery-sensor-note" class="hidden rounded-lg border border-yellow-100 bg-yellow-50 p-4">
+                        <div class="flex">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-info-circle text-yellow-600 text-lg"></i>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm text-yellow-700">
+                                    This sensor is battery powered and does not have an OLED display. Readings are automatically reported on a configurable interval to save power.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
 
-                    <label class="block text-sm font-medium text-gray-700">Min Temperature (°C)</label>
-                    <input type="number" id="config-min-temp" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
+                    <!-- Report interval for battery sensors -->
+                    <div id="config-report-interval" class="hidden rounded-lg border border-green-100 bg-green-50 p-4 space-y-3">
+                        <div>
+                            <h4 class="text-sm font-semibold text-gray-900 mb-1">Reporting interval</h4>
+                            <p class="text-sm text-gray-600">How often the sensor wakes up to report temperature and humidity.</p>
+                        </div>
+                        <div>
+                            <label for="config-report-interval-minutes" class="block text-sm font-medium text-gray-700">Report every (minutes)</label>
+                            <select id="config-report-interval-minutes" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                <option value="1">1 minute</option>
+                                <option value="2">2 minutes</option>
+                                <option value="5">5 minutes</option>
+                                <option value="10">10 minutes</option>
+                                <option value="15">15 minutes</option>
+                                <option value="30">30 minutes</option>
+                                <option value="60">1 hour</option>
+                                <option value="120">2 hours</option>
+                                <option value="360">6 hours</option>
+                            </select>
+                        </div>
+                    </div>
 
-                    <label class="block text-sm font-medium text-gray-700">Max Temperature (°C)</label>
-                    <input type="number" id="config-max-temp" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3" />
+                    <div id="config-brightness-schedule" class="rounded-lg border border-blue-100 bg-blue-50 p-4 space-y-4">
+                        <div>
+                            <h4 class="text-sm font-semibold text-gray-900 mb-1">Brightness schedule</h4>
+                            <p class="text-sm text-gray-600">Use time-based brightness for the display.</p>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label for="config-day-start" class="block text-sm font-medium text-gray-700">Day starts</label>
+                                <input type="time" id="config-day-start" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label for="config-day-brightness" class="block text-sm font-medium text-gray-700">Day brightness (%)</label>
+                                <input type="number" id="config-day-brightness" min="0" max="100" step="1" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label for="config-night-start" class="block text-sm font-medium text-gray-700">Night starts</label>
+                                <input type="time" id="config-night-start" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label for="config-night-brightness" class="block text-sm font-medium text-gray-700">Night brightness (%)</label>
+                                <input type="number" id="config-night-brightness" min="0" max="100" step="1" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="config-primary-display" class="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
+                        <div>
+                            <h4 class="text-sm font-semibold text-gray-900 mb-1">Primary display</h4>
+                            <p class="text-sm text-gray-600">Set a short name shown on the main screen. Max 5 characters.</p>
+                        </div>
+                        <div>
+                            <label for="config-primary-short-name" class="block text-sm font-medium text-gray-700">Short name</label>
+                            <input type="text" id="config-primary-short-name" maxlength="5" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="">
+                        </div>
+                    </div>
+
+                    <div id="config-secondary-display" class="rounded-lg border border-gray-200 bg-white p-4 space-y-4">
+                        <div>
+                            <h4 class="text-sm font-semibold text-gray-900 mb-1">Secondary display</h4>
+                            <p class="text-sm text-gray-600">Optionally mirror a different sensor on a second screen.</p>
+                        </div>
+                        <label class="flex items-center space-x-3 cursor-pointer">
+                            <input type="checkbox" id="config-secondary-enabled" class="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                            <span class="text-sm font-medium text-gray-900">Enable secondary display</span>
+                        </label>
+                        <div>
+                            <label for="config-secondary-sensor" class="block text-sm font-medium text-gray-700">Secondary sensor</label>
+                            <select id="config-secondary-sensor" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500"></select>
+                        </div>
+                        <div>
+                            <label for="config-secondary-short-name" class="block text-sm font-medium text-gray-700">Secondary short name</label>
+                            <input type="text" id="config-secondary-short-name" maxlength="5" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="">
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <button type="button" onclick="saveConfig()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                <button type="button" id="config-save-btn" onclick="saveConfig()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
                     Save
                 </button>
                 <button type="button" onclick="closeConfigModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">

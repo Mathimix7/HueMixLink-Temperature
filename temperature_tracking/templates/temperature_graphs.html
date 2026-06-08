@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Temperature Graphs - HueMix-Link{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('temperature_tracking.static', filename='css/charts.css') }}">
+<script src="{{ url_for('temperature_tracking.static', filename='js/chart.umd.min.js') }}"></script>
+<script src="{{ url_for('temperature_tracking.static', filename='js/chartjs-adapter-date-fns.bundle.min.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-4xl pb-1 font-bold bg-gradient-to-r from-emerald-600 to-emerald-400 bg-clip-text text-transparent mb-1">
+                    Temperature Graphs
+                </h1>
+                <p class="text-gray-600">Visualize temperature and humidity over time</p>
+            </div>
+            <div class="flex items-center space-x-3">
+                <a href="{{ url_for('temperature_tracking.index') }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors inline-flex items-center">
+                    <i class="fas fa-table mr-2"></i>Table View
+                </a>
+                <a href="/" class="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors inline-flex items-center">
+                    <i class="fas fa-arrow-left mr-2"></i>Home
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="bg-white rounded-2xl shadow-lg p-4 mb-6">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <!-- Sensor Selector -->
+            <div class="flex flex-wrap items-center gap-3" id="sensor-selector">
+                <span class="text-sm font-medium text-gray-700"><i class="fas fa-microchip mr-1"></i>Sensors:</span>
+                <div id="sensor-checkboxes" class="flex flex-wrap gap-2">
+                    <!-- populated by JS -->
+                </div>
+            </div>
+
+            <!-- Time Range -->
+            <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-gray-700 inline-flex items-center"><i class="fas fa-clock mr-1"></i>Range:</span>
+                <div class="flex rounded-lg border border-gray-300 overflow-hidden" id="time-range-buttons">
+                    <button data-range="6h" class="px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors">6h</button>
+                    <button data-range="24h" class="px-3 py-1.5 text-sm font-medium bg-blue-600 text-white transition-colors">24h</button>
+                    <button data-range="7d" class="px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors">7d</button>
+                    <button data-range="30d" class="px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors">30d</button>
+                    <button data-range="all" class="px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors">All</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="space-y-6">
+        <!-- Temperature Chart -->
+        <div class="bg-white rounded-2xl shadow-lg p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold text-gray-800">
+                    <i class="fas fa-temperature-high mr-2 text-red-500"></i>Temperature
+                </h2>
+                <span class="text-xs text-gray-400">°C</span>
+            </div>
+            <div class="chart-container">
+                <canvas id="temp-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- Humidity Chart -->
+        <div class="bg-white rounded-2xl shadow-lg p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold text-gray-800">
+                    <i class="fas fa-tint mr-2 text-blue-500"></i>Humidity
+                </h2>
+                <span class="text-xs text-gray-400">%</span>
+            </div>
+            <div class="chart-container">
+                <canvas id="humidity-chart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.__SENSORS = {{ sensors_json | safe }};
+    window.__READINGS_ENDPOINT = '{{ url_for("temperature_tracking.readings") }}';
+    window.__AGGREGATE_ENDPOINT = '{{ url_for("temperature_tracking.readings_aggregate") }}';
+</script>
+<script src="{{ url_for('temperature_tracking.static', filename='js/charts.js') }}"></script>
+{% endblock %}

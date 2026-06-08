@@ -1,6 +1,57 @@
 let sensors = [];
 let currentSensorId = null;
 
+function formatDate(value) {
+    if (!value) return 'Never';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Unknown';
+    return date.toLocaleString();
+}
+
+function getSensorStatus(sensor) {
+    if (sensor.config_pending) {
+        return { color: '#EAB308', label: 'Pending config — not yet received by device' };
+    }
+    if (!sensor.last_seen) {
+        return { color: '#EF4444', label: 'Offline — no data received yet' };
+    }
+    const intervalMs = ((sensor.config && sensor.config.report_interval_seconds) || 600) * 1000;
+    const lastSeen = new Date(sensor.last_seen).getTime();
+    if (Date.now() - lastSeen > intervalMs * 2.5) {
+        return { color: '#EF4444', label: 'Offline — no data within expected reporting interval' };
+    }
+    return { color: '#22C55E', label: 'Online — reporting normally' };
+}
+
+function getBatteryDisplay(sensor) {
+    if (sensor.battery_percent === undefined || sensor.battery_percent === null) {
+        return '<span class="text-sm text-gray-400 flex items-center space-x-2"><i class="fas fa-battery-empty text-gray-400"></i><span>N/A</span></span>';
+    }
+
+    let iconClass = 'fa-battery-half';
+    let colorClass = 'text-yellow-600';
+
+    if (sensor.battery_percent >= 60) {
+        iconClass = 'fa-battery-full';
+        colorClass = 'text-green-600';
+    } else if (sensor.battery_percent < 20) {
+        iconClass = 'fa-battery-quarter';
+        colorClass = 'text-red-600';
+    }
+
+    const lastUpdated = formatDate(sensor.battery_last_updated);
+    return `
+        <div class="flex items-center space-x-2 battery-tooltip">
+            <i class="fas ${iconClass} ${colorClass}"></i>
+            <span class="text-sm font-medium ${colorClass}">${sensor.battery_percent}%</span>
+            <div class="tooltip-content">
+                <div><strong>Voltage:</strong> ${sensor.battery_mv || 'N/A'} mV</div>
+                <div><strong>Updated:</strong> ${lastUpdated}</div>
+            </div>
+        </div>
+    `;
+}
+
 window.addEventListener('DOMContentLoaded', function() {
     loadSensors();
 });
@@ -31,13 +82,10 @@ function loadSensors() {
                 <div class="h-4 bg-gray-200 rounded w-36"></div>
             </td>
             <td class="px-6 py-4 whitespace-nowrap">
-                <div class="h-4 bg-gray-200 rounded w-20"></div>
+                <div class="h-4 bg-gray-200 rounded w-28"></div>
             </td>
             <td class="px-6 py-4 whitespace-nowrap">
                 <div class="h-4 bg-gray-200 rounded w-20"></div>
-            </td>
-            <td class="px-6 py-4 whitespace-nowrap">
-                <div class="h-4 bg-gray-200 rounded w-24"></div>
             </td>
             <td class="px-6 py-4 whitespace-nowrap">
                 <div class="h-4 bg-gray-200 rounded w-24"></div>
@@ -59,7 +107,7 @@ function loadSensors() {
             console.error('Error loading sensors:', err);
             showToast('Error', 'Failed to load temperature sensors', 'error');
             const tbody = document.getElementById('devices-table-body');
-            if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="px-6 py-12 text-center text-gray-500"><p class="text-lg">Unable to load sensors</p></td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="px-6 py-12 text-center text-gray-500"><p class="text-lg">Unable to load sensors</p></td></tr>`;
         });
 }
 
@@ -71,7 +119,7 @@ function renderSensors() {
     if (sensors.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="7" class="px-6 py-12 text-center text-gray-500">
+                <td colspan="6" class="px-6 py-12 text-center text-gray-500">
                     <p class="text-lg">No temperature sensors found</p>
                     <p class="text-sm mt-1">Sensors will appear here once paired.</p>
                 </td>
@@ -86,7 +134,11 @@ function renderSensors() {
 
         const nameCell = document.createElement('td');
         nameCell.className = 'px-6 py-4 whitespace-nowrap';
-        nameCell.innerHTML = `<div class="flex items-center"><i class="fas fa-thermometer-half mr-2 text-blue-500"></i><span class="text-sm font-medium text-gray-900">${sensor.name || ''}</span></div>`;
+        const isBattery = sensor.device_type === 1;
+        const iconColor = isBattery ? 'text-green-500' : 'text-blue-500';
+        const badge = isBattery ? '<span class="ml-2 px-2 py-0.5 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Battery</span>' : '<span class="ml-2 px-2 py-0.5 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">OLED Screen</span>';
+        const status = getSensorStatus(sensor);
+        nameCell.innerHTML = `<div class="flex items-center"><span class="inline-block w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0" style="background-color:${status.color}" title="${status.label}"></span><span class="text-sm font-medium text-gray-900">${sensor.name || ''}</span>${badge}</div>`;
 
         const macCell = document.createElement('td');
         macCell.className = 'px-6 py-4 whitespace-nowrap';
@@ -94,7 +146,7 @@ function renderSensors() {
 
         const tempCell = document.createElement('td');
         tempCell.className = 'px-6 py-4 whitespace-nowrap';
-        tempCell.innerHTML = `<span class="text-sm font-medium text-gray-900">${sensor.temperature_c !== undefined && sensor.temperature_c !== null ? sensor.temperature_c.toFixed(1) + '°C' : 'N/A'}</span>`;
+        tempCell.innerHTML = `<span class="text-sm text-gray-900">${sensor.temperature_c !== undefined && sensor.temperature_c !== null ? sensor.temperature_c.toFixed(1) + '°C' : '—'}</span>`;
 
         const humidCell = document.createElement('td');
         humidCell.className = 'px-6 py-4 whitespace-nowrap';
@@ -102,7 +154,7 @@ function renderSensors() {
 
         const batteryCell = document.createElement('td');
         batteryCell.className = 'px-6 py-4 whitespace-nowrap';
-        batteryCell.innerHTML = sensor.last_battery_mv ? `<span class="text-sm text-gray-700">${sensor.last_battery_mv} mV</span>` : `<span class="text-sm text-gray-400">N/A</span>`;
+        batteryCell.innerHTML = getBatteryDisplay(sensor);
 
         const actionsCell = document.createElement('td');
         actionsCell.className = 'px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2';
@@ -174,11 +226,83 @@ function saveDeviceName() {
 // Config modal handlers
 function openConfigModal(sensorId, sensorName, config) {
     currentSensorId = sensorId;
+    const sensor = sensors.find(s => s.id === sensorId);
+    const isBattery = sensor && sensor.device_type === 1;
+
+    // Show/hide sections based on battery sensor type
+    if (isBattery) {
+        document.getElementById('config-brightness-schedule').classList.add('hidden');
+        document.getElementById('config-primary-display').classList.add('hidden');
+        document.getElementById('config-secondary-display').classList.add('hidden');
+        document.getElementById('config-save-btn').classList.remove('hidden');
+        document.getElementById('config-battery-sensor-note').classList.remove('hidden');
+        document.getElementById('config-report-interval').classList.remove('hidden');
+    } else {
+        document.getElementById('config-brightness-schedule').classList.remove('hidden');
+        document.getElementById('config-primary-display').classList.remove('hidden');
+        document.getElementById('config-secondary-display').classList.remove('hidden');
+        document.getElementById('config-save-btn').classList.remove('hidden');
+        document.getElementById('config-battery-sensor-note').classList.add('hidden');
+        document.getElementById('config-report-interval').classList.remove('hidden');
+    }
+
+    const brightness = config && config.brightness ? config.brightness : {};
+    const secondary = config && config.secondary ? config.secondary : {};
     document.getElementById('config-device-name').textContent = sensorName || '';
-    document.getElementById('config-enabled').checked = !!(config && config.enabled);
-    document.getElementById('config-min-temp').value = config && config.min_temperature_c != null ? config.min_temperature_c : '';
-    document.getElementById('config-max-temp').value = config && config.max_temperature_c != null ? config.max_temperature_c : '';
+    document.getElementById('config-day-start').value = brightness.day_start || '07:00';
+    document.getElementById('config-day-brightness').value = brightness.day ?? 100;
+    document.getElementById('config-night-start').value = brightness.night_start || '21:00';
+    document.getElementById('config-night-brightness').value = brightness.night ?? 25;
+    document.getElementById('config-primary-short-name').value = config && config.primary_short_name ? config.primary_short_name : '';
+    document.getElementById('config-secondary-enabled').checked = !!secondary.enabled;
+    document.getElementById('config-secondary-short-name').value = secondary.short_name || '';
+    // Set report interval (stored in seconds, UI in minutes)
+    const intervalSec = (config && config.report_interval_seconds) || 600;
+    const intervalMin = Math.round(intervalSec / 60);
+    const intervalSelect = document.getElementById('config-report-interval-minutes');
+    if (intervalSelect) {
+        if ([1, 2, 5, 10, 15, 30, 60, 120, 360].includes(intervalMin)) {
+            intervalSelect.value = intervalMin;
+        } else {
+            intervalSelect.value = 10;
+        }
+    }
+    populateSecondarySensorOptions(sensorId, secondary.sensor_id || '');
+    updateSecondaryDisplayState();
     document.getElementById('config-modal').classList.remove('hidden');
+}
+
+function populateSecondarySensorOptions(currentSensorId, selectedSensorId) {
+    const select = document.getElementById('config-secondary-sensor');
+    if (!select) return;
+
+    select.innerHTML = '';
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Choose a sensor';
+    select.appendChild(placeholder);
+
+    sensors.forEach(sensor => {
+        if (!sensor || sensor.id === currentSensorId) return;
+        const label = sensor.name ? `${sensor.name} (${sensor.mac_address || sensor.id || ''})` : (sensor.mac_address || sensor.id || 'Unknown sensor');
+        const option = document.createElement('option');
+        option.value = sensor.id;
+        option.textContent = label;
+        select.appendChild(option);
+    });
+
+    select.value = selectedSensorId || '';
+    select.disabled = select.options.length <= 1;
+}
+
+function updateSecondaryDisplayState() {
+    const enabled = document.getElementById('config-secondary-enabled').checked;
+    const sensorSelect = document.getElementById('config-secondary-sensor');
+    const shortNameInput = document.getElementById('config-secondary-short-name');
+
+    if (sensorSelect) sensorSelect.disabled = !enabled || sensorSelect.options.length <= 1;
+    if (shortNameInput) shortNameInput.disabled = !enabled;
 }
 
 function closeConfigModal() {
@@ -188,11 +312,40 @@ function closeConfigModal() {
 
 function saveConfig() {
     if (!currentSensorId) return;
+
+    const primaryShortName = document.getElementById('config-primary-short-name').value.trim();
+    const secondaryEnabled = document.getElementById('config-secondary-enabled').checked;
+    const secondarySensorId = document.getElementById('config-secondary-sensor').value;
+    const secondaryShortName = document.getElementById('config-secondary-short-name').value.trim();
+    const dayBrightnessValue = document.getElementById('config-day-brightness').value;
+    const nightBrightnessValue = document.getElementById('config-night-brightness').value;
+
+    if (primaryShortName.length > 5) return showToast('Validation Error', 'Primary short name must be 5 characters or fewer', 'warning');
+    if (secondaryShortName.length > 5) return showToast('Validation Error', 'Secondary short name must be 5 characters or fewer', 'warning');
+    if (secondaryEnabled && !secondarySensorId) return showToast('Validation Error', 'Pick a secondary sensor', 'warning');
+
+    const intervalSelect = document.getElementById('config-report-interval-minutes');
+    const intervalMinutes = intervalSelect ? parseInt(intervalSelect.value, 10) : 10;
+
     const payload = {
-        enabled: document.getElementById('config-enabled').checked,
-        min_temperature_c: document.getElementById('config-min-temp').value ? parseFloat(document.getElementById('config-min-temp').value) : null,
-        max_temperature_c: document.getElementById('config-max-temp').value ? parseFloat(document.getElementById('config-max-temp').value) : null,
+        report_interval_seconds: intervalMinutes * 60,
+        brightness: {
+            day_start: document.getElementById('config-day-start').value,
+            day: dayBrightnessValue === '' ? 100 : Number(dayBrightnessValue),
+            night_start: document.getElementById('config-night-start').value,
+            night: nightBrightnessValue === '' ? 25 : Number(nightBrightnessValue),
+        },
+        primary_short_name: primaryShortName,
+        secondary: {
+            enabled: secondaryEnabled,
+            sensor_id: secondaryEnabled ? secondarySensorId : null,
+            short_name: secondaryEnabled ? secondaryShortName : '',
+        },
     };
+
+    if (secondaryEnabled && secondarySensorId === currentSensorId) {
+        return showToast('Validation Error', 'Secondary display must use a different sensor', 'warning');
+    }
 
     fetch(`/plugins/temperature/api/devices/${currentSensorId}/configure`, {
         method: 'POST',
@@ -211,6 +364,12 @@ function saveConfig() {
         showToast('Error', 'Save failed', 'error');
     });
 }
+
+document.addEventListener('change', function(event) {
+    if (event.target && event.target.id === 'config-secondary-enabled') {
+        updateSecondaryDisplayState();
+    }
+});
 
 // Delete handlers
 let pendingDeleteId = null;

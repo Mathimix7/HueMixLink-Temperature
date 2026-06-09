@@ -325,7 +325,6 @@ class TemperatureTrackingPlugin:
         # Edit to not just check for device not being part of the plguin, but also checking the device IS part of the plugin. 
         plugin_for_mac = plugin_manager.get_plugin_for_mac(source_mac)
         if not plugin_for_mac or plugin_for_mac.replace('-', '').lower() != self.plugin_uuid.replace('-', '').lower():
-            self._log(f'Ignoring packet from {source_mac} handled by different plugin {plugin_for_mac}')
             return
         
         was_known_sensor = self._find_sensor_by_id(source_mac)

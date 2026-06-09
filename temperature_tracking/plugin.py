@@ -50,6 +50,7 @@ class TemperatureTrackingPlugin:
         self.blueprint.add_url_rule('/readings/aggregate', 'readings_aggregate', self.readings_aggregate)
 
         # API endpoints for device management
+        self.blueprint.add_url_rule('/api/sensor_states', 'api_sensor_states', self.api_sensor_states)
         self.blueprint.add_url_rule('/api/devices/<device_id>/rename', 'api_device_rename', self.api_device_rename, methods=['POST'])
         self.blueprint.add_url_rule('/api/devices/<device_id>/configure', 'api_device_configure', self.api_device_configure, methods=['POST'])
         self.blueprint.add_url_rule('/api/devices/<device_id>', 'api_device_delete', self.api_device_delete, methods=['DELETE'])
@@ -530,6 +531,12 @@ class TemperatureTrackingPlugin:
 
     def _find_sensor_by_id(self, sensor_id: str) -> dict[str, Any] | None:
         return self._storage.get_sensor(sensor_id)
+
+    def api_sensor_states(self):
+        """Return dict of sensor_id -> updated_at timestamp for polling."""
+        sensors = self._storage.list_sensors()
+        states = {s['id']: s.get('updated_at') for s in sensors}
+        return jsonify({'success': True, 'sensor_states': states})
 
     def api_device_rename(self, device_id: str):
         """Rename a device (called by core pairing manager and UI)."""

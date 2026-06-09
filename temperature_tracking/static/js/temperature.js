@@ -1,5 +1,6 @@
 let sensors = [];
 let currentSensorId = null;
+let lastSensorStates = {};
 
 function formatDate(value) {
     if (!value) return 'Never';
@@ -52,8 +53,85 @@ function getBatteryDisplay(sensor) {
     `;
 }
 
+function pollSensorStates() {
+    fetch('/plugins/temperature/api/sensor_states')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.sensor_states) {
+                const states = data.sensor_states;
+                for (const [id, updatedAt] of Object.entries(states)) {
+                    if (updatedAt && lastSensorStates[id] && lastSensorStates[id] !== updatedAt) {
+                        flashSensorRow(id);
+                        fetch('/plugins/temperature/sensors')
+                            .then(resp => resp.json())
+                            .then(sensorData => {
+                                const updated = (Array.isArray(sensorData) ? sensorData : []).find(s => s.id === id);
+                                if (updated) {
+                                    const idx = sensors.findIndex(s => s.id === id);
+                                    if (idx !== -1) sensors[idx] = updated;
+                                    else sensors.push(updated);
+                                    updateDeviceRow(updated);
+                                }
+                            })
+                            .catch(() => loadSensors());
+                    }
+                    if (!sensors.find(s => s.id === id)) {
+                        loadSensors();
+                    }
+                    lastSensorStates[id] = updatedAt;
+                }
+            }
+        })
+        .catch(() => {});
+}
+
+function flashSensorRow(deviceId) {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    const row = Array.from(tbody.children).find(r => r.dataset && r.dataset.deviceId === deviceId);
+    if (row) {
+        row.classList.remove('flash-temperature');
+        void row.offsetWidth;
+        row.classList.add('flash-temperature');
+        setTimeout(() => row.classList.remove('flash-temperature'), 700);
+    }
+}
+
+function updateDeviceRow(device) {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    const row = Array.from(tbody.children).find(r => r.dataset && r.dataset.deviceId === device.id);
+    if (!row) return;
+
+    const nameCell = row.children[0];
+    if (nameCell) {
+        const isBattery = device.device_type === 1;
+        const badge = isBattery
+            ? '<span class="ml-2 px-2 py-0.5 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Battery</span>'
+            : '<span class="ml-2 px-2 py-0.5 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">OLED Screen</span>';
+        const status = getSensorStatus(device);
+        nameCell.innerHTML = `<div class="flex items-center"><span class="inline-block w-2.5 h-2.5 rounded-full mr-2 flex-shrink-0" style="background-color:${status.color}" title="${status.label}"></span><span class="text-sm font-medium text-gray-900">${device.name || ''}</span>${badge}</div>`;
+    }
+
+    const tempCell = row.children[2];
+    if (tempCell) {
+        tempCell.innerHTML = `<span class="text-sm text-gray-900">${device.temperature_c !== undefined && device.temperature_c !== null ? device.temperature_c.toFixed(1) + '°C' : '—'}</span>`;
+    }
+
+    const humidCell = row.children[3];
+    if (humidCell) {
+        humidCell.innerHTML = `<span class="text-sm text-gray-700">${device.humidity_pct !== undefined && device.humidity_pct !== null ? device.humidity_pct.toFixed(1) + '%' : '—'}</span>`;
+    }
+
+    const batteryCell = row.children[4];
+    if (batteryCell) {
+        batteryCell.innerHTML = getBatteryDisplay(device);
+    }
+}
+
 window.addEventListener('DOMContentLoaded', function() {
     loadSensors();
+    setInterval(pollSensorStates, 2000);
 });
 
 function refreshSensors() {
@@ -131,6 +209,7 @@ function renderSensors() {
     sensors.forEach(sensor => {
         const row = document.createElement('tr');
         row.className = 'hover:bg-gray-50';
+        row.dataset.deviceId = sensor.id;
 
         const nameCell = document.createElement('td');
         nameCell.className = 'px-6 py-4 whitespace-nowrap';

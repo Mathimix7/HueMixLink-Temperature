@@ -1,6 +1,9 @@
 let sensors = [];
 let currentSensorId = null;
 let lastSensorStates = {};
+let batterySensorId = null;
+let batteryChartInstance = null;
+let batteryActiveRange = '7d';
 
 function formatDate(value) {
     if (!value) return 'Never';
@@ -232,8 +235,11 @@ function renderSensors() {
         humidCell.innerHTML = `<span class="text-sm text-gray-700">${sensor.humidity_pct !== undefined && sensor.humidity_pct !== null ? sensor.humidity_pct.toFixed(1) + '%' : '—'}</span>`;
 
         const batteryCell = document.createElement('td');
-        batteryCell.className = 'px-6 py-4 whitespace-nowrap';
+        batteryCell.className = 'px-6 py-4 whitespace-nowrap cursor-pointer';
         batteryCell.innerHTML = getBatteryDisplay(sensor);
+        batteryCell.addEventListener('click', (function(id) {
+            return function() { openBatteryGraph(id); };
+        })(sensor.id));
 
         const actionsCell = document.createElement('td');
         actionsCell.className = 'px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2';
@@ -481,3 +487,186 @@ function confirmDelete() {
             showToast('Error', 'Delete failed', 'error');
         });
 }
+
+// Battery history graph modal
+function openBatteryGraph(sensorId) {
+    const sensor = sensors.find(s => s.id === sensorId);
+    batterySensorId = sensorId;
+    const nameEl = document.getElementById('battery-modal-sensor-name');
+    if (nameEl) nameEl.textContent = sensor ? (sensor.name || '') : sensorId;
+    const modal = document.getElementById('battery-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    batteryActiveRange = '7d';
+
+    const buttons = document.querySelectorAll('#battery-time-range-buttons button');
+    buttons.forEach(b => {
+        b.classList.remove('bg-blue-600', 'text-white');
+        b.classList.add('text-gray-600', 'hover:bg-gray-100');
+    });
+    const activeBtn = document.querySelector('#battery-time-range-buttons button[data-range="7d"]');
+    if (activeBtn) {
+        activeBtn.classList.remove('text-gray-600', 'hover:bg-gray-100');
+        activeBtn.classList.add('bg-blue-600', 'text-white');
+    }
+
+    updateBatteryChart();
+}
+
+function closeBatteryModal() {
+    document.getElementById('battery-modal').classList.add('hidden');
+    if (batteryChartInstance) {
+        batteryChartInstance.destroy();
+        batteryChartInstance = null;
+    }
+    batterySensorId = null;
+}
+
+function getBatteryTimeRangeStart(rangeKey) {
+    const ranges = {
+        '24h': 24 * 60 * 60 * 1000,
+        '7d':  7 * 24 * 60 * 60 * 1000,
+        '30d': 30 * 24 * 60 * 60 * 1000,
+        '90d': 90 * 24 * 60 * 60 * 1000,
+        'all': null,
+    };
+    const ms = ranges[rangeKey];
+    return ms ? new Date(Date.now() - ms).toISOString() : null;
+}
+
+async function updateBatteryChart() {
+    if (!batterySensorId) return;
+
+    const start = getBatteryTimeRangeStart(batteryActiveRange);
+    const params = new URLSearchParams({ sensor_id: batterySensorId, limit: '5000' });
+    if (start) params.set('start', start);
+
+    try {
+        const resp = await fetch(`${window.__READINGS_ENDPOINT}?${params}`);
+        if (!resp.ok) return;
+        let readings = await resp.json();
+        readings.reverse();
+
+        const data = readings
+            .map(r => ({
+                x: new Date(r.timestamp).getTime(),
+                y: r.battery_percent !== null && r.battery_percent !== undefined ? r.battery_percent : null,
+            }))
+            .filter(d => d.y !== null && !isNaN(d.y));
+
+        renderBatteryChart(data);
+    } catch (err) {
+        console.error('Failed to load battery readings:', err);
+    }
+}
+
+function renderBatteryChart(data) {
+    const canvas = document.getElementById('battery-chart');
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const gridColor = isDark ? '#374151' : '#E5E7EB';
+    const textColor = isDark ? '#D1D5DB' : '#6B7280';
+
+    const config = {
+        type: 'line',
+        data: {
+            datasets: [{
+                label: 'Battery %',
+                data: data,
+                borderColor: '#22C55E',
+                backgroundColor: '#22C55E33',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 2,
+                pointHoverRadius: 5,
+                borderWidth: 2,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                intersect: false,
+                mode: 'index',
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: 'rgba(17, 24, 39, 0.9)',
+                    titleColor: '#F9FAFB',
+                    bodyColor: '#D1D5DB',
+                    padding: 10,
+                    cornerRadius: 8,
+                    callbacks: {
+                        title(items) {
+                            if (!items.length) return '';
+                            return new Date(items[0].parsed.x).toLocaleString();
+                        },
+                        label(item) {
+                            return `Battery: ${item.parsed.y}%`;
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    type: 'time',
+                    time: {
+                        tooltipFormat: 'MMM d, HH:mm',
+                        displayFormats: {
+                            hour: 'MMM d HH:mm',
+                            day: 'MMM d',
+                        },
+                    },
+                    grid: { color: gridColor, drawBorder: false },
+                    ticks: {
+                        color: textColor,
+                        maxTicksLimit: 10,
+                        font: { size: 11 },
+                    },
+                },
+                y: {
+                    min: 0,
+                    max: 100,
+                    grid: { color: gridColor, drawBorder: false },
+                    ticks: {
+                        color: textColor,
+                        font: { size: 11 },
+                        callback(value) { return value + '%'; },
+                    },
+                    title: {
+                        display: true,
+                        text: 'Battery (%)',
+                        color: textColor,
+                        font: { size: 12, weight: '600' },
+                    },
+                },
+            },
+        },
+    };
+
+    if (batteryChartInstance) {
+        batteryChartInstance.destroy();
+    }
+    batteryChartInstance = new Chart(ctx, config);
+}
+
+
+
+// Battery time range buttons
+document.addEventListener('click', function(event) {
+    const btn = event.target.closest('#battery-time-range-buttons button');
+    if (!btn) return;
+
+    const buttons = document.querySelectorAll('#battery-time-range-buttons button');
+    buttons.forEach(b => {
+        b.classList.remove('bg-blue-600', 'text-white');
+        b.classList.add('text-gray-600', 'hover:bg-gray-100');
+    });
+    btn.classList.remove('text-gray-600', 'hover:bg-gray-100');
+    btn.classList.add('bg-blue-600', 'text-white');
+    batteryActiveRange = btn.dataset.range;
+    updateBatteryChart();
+});

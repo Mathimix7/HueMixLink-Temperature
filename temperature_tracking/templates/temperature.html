@@ -4,6 +4,9 @@
 
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('temperature_tracking.static', filename='css/temperature.css') }}">
+<link rel="stylesheet" href="{{ url_for('temperature_tracking.static', filename='css/charts.css') }}">
+<script src="{{ url_for('temperature_tracking.static', filename='js/chart.umd.min.js') }}"></script>
+<script src="{{ url_for('temperature_tracking.static', filename='js/chartjs-adapter-date-fns.bundle.min.js') }}"></script>
 {% endblock %}
 
 {% block content %}
@@ -250,7 +253,51 @@
     </div>
 </div>
 
+<!-- Battery History Modal -->
+<div id="battery-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeBatteryModal()"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
+            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">
+                        <i class="fas fa-battery-three-quarters mr-2 text-green-600"></i>Battery History: <span id="battery-modal-sensor-name" class="text-green-600"></span>
+                    </h3>
+                    <button onclick="closeBatteryModal()" class="text-gray-400 hover:text-gray-500 p-2">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <!-- Time Range Buttons -->
+                <div class="flex items-center gap-2 mb-4">
+                    <span class="text-sm font-medium text-gray-700 inline-flex items-center"><i class="fas fa-clock mr-1"></i>Range:</span>
+                    <div class="flex rounded-lg border border-gray-300 overflow-hidden" id="battery-time-range-buttons">
+                        <button data-range="24h" class="px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors">24h</button>
+                        <button data-range="7d" class="px-3 py-1.5 text-sm font-medium bg-blue-600 text-white transition-colors">7d</button>
+                        <button data-range="30d" class="px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors">30d</button>
+                        <button data-range="90d" class="px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors">90d</button>
+                        <button data-range="all" class="px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors">All</button>
+                    </div>
+                </div>
+                <!-- Chart -->
+                <div class="chart-container" style="height: 300px;">
+                    <canvas id="battery-chart"></canvas>
+                </div>
+                <p class="text-xs text-gray-400 mt-2 text-center">Click on the battery percentage cell in the table to reopen this graph.</p>
+            </div>
+            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button type="button" onclick="closeBatteryModal()" class="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:w-auto sm:text-sm">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 
+
+<script>
+    window.__READINGS_ENDPOINT = '{{ url_for("temperature_tracking.readings") }}';
+</script>
 <script src="{{ url_for('temperature_tracking.static', filename='js/temperature.js') }}"></script>
 {% endblock %}

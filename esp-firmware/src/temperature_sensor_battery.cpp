@@ -1158,6 +1158,9 @@ void setup() {
       uint32_t secsSinceBoundary = now % interval;
       uint32_t secsToBoundary = interval - secsSinceBoundary;
       uint32_t graceSecs = interval * 5 / 100;
+      if (graceSecs < 60) {
+        graceSecs = 60;
+      }
       if (secsToBoundary < graceSecs) {
         Serial.printf("[TEMP-BATTERY] Woke %us before boundary (<5%%), deferring report\n", secsToBoundary);
       } else {

@@ -3,6 +3,7 @@
     "plugin_id": "550e8400-e29b-41d4-a716-446655440000",
     "module": "plugins.temperature_tracking.plugin",
     "enabled": true,
+    "version": "1.0.0",
     "devices": [
     {
         "device_type": 0,

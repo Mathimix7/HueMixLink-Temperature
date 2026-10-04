@@ -55,6 +55,17 @@ static const uint8_t PLUGIN_UUID[16] = {
 #define DISPLAY_INTERVAL_MS 1000
 #define RESET_HOLD_MS 5000
 
+// Report interval bounds and fallback, mirroring the plugin's validator.
+#define REPORT_INTERVAL_MIN_SEC 60
+#define REPORT_INTERVAL_MAX_SEC 86400
+#define REPORT_INTERVAL_FALLBACK_SEC 600
+
+// Secondary readings arrive whenever the *mirrored* sensor reports, so the staleness
+// timeout follows that sensor's interval. 2.5x is the same multiple the web UI uses to
+// mark a sensor offline, so the display and the UI agree on when a sensor has gone quiet.
+#define SECONDARY_STALE_NUMERATOR 5
+#define SECONDARY_STALE_DENOMINATOR 2
+
 Preferences prefs;
 Adafruit_SH1106G display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 Adafruit_SH1106G displaySec(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
@@ -75,6 +86,9 @@ uint8_t config_sec_enabled = 0;
 char config_sec_name[6] = "";
 uint8_t config_sec_mac[6] = {0};
 uint32_t config_report_interval = 600;
+// Mirrored sensor's report interval. 0 means the plugin did not supply one (older plugin
+// version), in which case the fixed fallback below is used.
+uint32_t config_sec_report_interval = 0;
 
 // Secondary reading state (Core 0 writes)
 volatile float sec_temp_c = NAN;
@@ -407,6 +421,18 @@ static void renderSecondaryInactive(Adafruit_SH1106G &disp, bool isReady) {
   if (!isReady) return;
   disp.clearDisplay();
   disp.display();
+}
+
+// How long the secondary reading stays on screen without an update from the mirrored
+// sensor. Derived from that sensor's own report interval, so a sensor configured to
+// report every 30 min or every 6 h is given a matching timeout instead of a fixed one.
+static unsigned long secondaryStaleTimeoutMs() {
+  uint32_t interval = config_sec_report_interval;
+  if (interval < REPORT_INTERVAL_MIN_SEC || interval > REPORT_INTERVAL_MAX_SEC) {
+    interval = REPORT_INTERVAL_FALLBACK_SEC;
+  }
+
+  return (unsigned long)interval * 1000UL * SECONDARY_STALE_NUMERATOR / SECONDARY_STALE_DENOMINATOR;
 }
 
 static void renderOtaStatus() {
@@ -1188,9 +1214,14 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     uint32_t report_interval;
     memcpy(&report_interval, &pkt.payload.raw[23], sizeof(report_interval));
 
-    Serial.printf("[TEMP-OLED] Received config: Day=%02d:%02d (%d%%), Night=%02d:%02d (%d%%), Primary='%s', Sec=%d '%s', Interval=%u\n",
-                  day_h, day_m, day_bright, night_h, night_m, night_bright, prim_name, sec_enabled, sec_name, report_interval);
-                 
+    // Mirrored sensor's report interval from bytes 27-30 (uint32 LE). Older plugin versions
+    // leave these as zero padding, which means "unknown" and falls back to the default.
+    uint32_t sec_report_interval;
+    memcpy(&sec_report_interval, &pkt.payload.raw[27], sizeof(sec_report_interval));
+
+    Serial.printf("[TEMP-OLED] Received config: Day=%02d:%02d (%d%%), Night=%02d:%02d (%d%%), Primary='%s', Sec=%d '%s', Interval=%u, SecInterval=%u\n",
+                  day_h, day_m, day_bright, night_h, night_m, night_bright, prim_name, sec_enabled, sec_name, report_interval, sec_report_interval);
+                  
     config_day_h = day_h;
     config_day_m = day_m;
     config_day_bright = day_bright;
@@ -1202,8 +1233,16 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     strcpy(config_sec_name, sec_name);
     memcpy(config_sec_mac, sec_mac, 6);
     
-    if (report_interval >= 60 && report_interval <= 86400) {
+    if (report_interval >= REPORT_INTERVAL_MIN_SEC && report_interval <= REPORT_INTERVAL_MAX_SEC) {
       config_report_interval = report_interval;
+    }
+
+    // Reset to unknown whenever the secondary is off or the plugin supplied nothing, so a
+    // stale interval from an earlier pairing can never drive the timeout.
+    if (sec_enabled && sec_report_interval >= REPORT_INTERVAL_MIN_SEC && sec_report_interval <= REPORT_INTERVAL_MAX_SEC) {
+      config_sec_report_interval = sec_report_interval;
+    } else {
+      config_sec_report_interval = 0;
     }
 
     prefs.putUChar("day_h", day_h);
@@ -1217,6 +1256,7 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     prefs.putString("sec_name", sec_name);
     prefs.putBytes("sec_mac", sec_mac, 6);
     prefs.putUInt("rpt_int", config_report_interval);
+    prefs.putUInt("sec_rpt_int", config_sec_report_interval);
   } else if (pkt.type == PKT_TEMP_SECONDARY) {
     if (HOME_ID != 0) {
       uint32_t expectedSig = calculateHash(pkt.payload.raw, 185, HOME_ID);
@@ -1301,6 +1341,7 @@ void setup() {
   
   prefs.getBytes("sec_mac", config_sec_mac, 6);
   config_report_interval = prefs.getUInt("rpt_int", 600);
+  config_sec_report_interval = prefs.getUInt("sec_rpt_int", 0);
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   displayReady = display.begin(OLED_ADDR_PRIMARY, true);
@@ -1491,8 +1532,9 @@ void loop() {
     lastDisplayMs = now;
   }
 
-  // Invalidate secondary data after 15 minutes of no updates
-  if (sec_data_valid && (now - sec_data_last_seen > 900000)) {
+  // Invalidate secondary data once the mirrored sensor has skipped a full reporting
+  // cycle plus grace, so the timeout tracks that sensor's configured interval.
+  if (sec_data_valid && (now - sec_data_last_seen > secondaryStaleTimeoutMs())) {
     sec_data_valid = false;
   }
 

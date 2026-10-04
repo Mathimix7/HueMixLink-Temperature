@@ -24,6 +24,12 @@ MAX_SHORT_NAME_LENGTH = 5
 REPORT_INTERVAL_MIN = 60       # 1 minute
 REPORT_INTERVAL_MAX = 86400    # 24 hours
 DEFAULT_REPORT_INTERVAL = 600  # 10 minutes
+
+# A mirrored ("secondary") reading is forwarded whenever the mirrored sensor reports, so its
+# cadence follows that sensor's own report interval, not the receiving display's. A sensor is
+# treated as silent after this multiple of that interval -- the same rule the web UI uses to
+# mark a sensor offline (see static/js/temperature.js).
+SECONDARY_STALE_FACTOR = 2.5
     
 
 @dataclass
@@ -127,6 +133,25 @@ class TemperatureTrackingPlugin:
         if interval > REPORT_INTERVAL_MAX:
             return 0, f'Report interval must be at most {REPORT_INTERVAL_MAX} seconds ({REPORT_INTERVAL_MAX // 3600} hours)'
         return interval, None
+
+    @staticmethod
+    def _sensor_report_interval(sensor: dict | None) -> int:
+        """Report interval of a stored sensor record, clamped to the supported range."""
+        raw = ((sensor or {}).get('config') or {}).get('report_interval_seconds')
+        try:
+            interval = int(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_REPORT_INTERVAL
+        return min(max(interval, REPORT_INTERVAL_MIN), REPORT_INTERVAL_MAX)
+
+    @classmethod
+    def _secondary_stale_timeout_seconds(cls, secondary_sensor: dict | None) -> int:
+        """Seconds of silence from a mirrored sensor before its reading counts as stale.
+
+        Mirrors the firmware's own calculation so both sides agree on when a secondary
+        display should drop to N/A.
+        """
+        return int(cls._sensor_report_interval(secondary_sensor) * SECONDARY_STALE_FACTOR)
 
     @staticmethod
     def _validate_short_name(value: Any, field_name: str) -> tuple[str, str | None]:
@@ -653,25 +678,33 @@ class TemperatureTrackingPlugin:
         sec_name_bytes = sec_name_bytes + b'\x00' * (5 - len(sec_name_bytes))
 
         sec_mac_str = '00:00:00:00:00:00'
+        secondary_sensor = None
         if sec_enabled:
             sec_sensor_id = secondary.get('sensor_id')
             if sec_sensor_id:
-                sec_sensor = self._find_sensor_by_id(sec_sensor_id)
-                if sec_sensor:
-                    sec_mac_str = sec_sensor.get('mac_address', '00:00:00:00:00:00')
+                secondary_sensor = self._find_sensor_by_id(sec_sensor_id)
+                if secondary_sensor:
+                    sec_mac_str = secondary_sensor.get('mac_address', '00:00:00:00:00:00')
 
         sec_mac_bytes = binascii.unhexlify(sec_mac_str.replace(':', ''))
 
         report_interval = int(config.get('report_interval_seconds', DEFAULT_REPORT_INTERVAL))
 
+        # The mirrored sensor reports on its own schedule, so the display's staleness timeout
+        # has to follow that schedule. 0 tells older firmware to keep its own fixed timeout.
+        sec_report_interval = (
+            self._sensor_report_interval(secondary_sensor) if secondary_sensor else 0
+        )
+
         # Pack everything into payload
         payload_data = struct.pack(
-            "<BBBBBB5sB5s6sI",
+            "<BBBBBB5sB5s6sII",
             day_h, day_m, day_brightness,
             night_h, night_m, night_brightness,
             primary_name_bytes,
             sec_enabled, sec_name_bytes, sec_mac_bytes,
             report_interval,
+            sec_report_interval,
         )
 
         # Pad to 185 bytes
@@ -749,6 +782,8 @@ class TemperatureTrackingPlugin:
         if not last_seen_gateway:
             return
 
+        stale_after_seconds = self._secondary_stale_timeout_seconds(secondary_sensor)
+
         recent_readings = self._storage.list_readings(sensor_id=secondary_sensor_id, limit=1)
         if recent_readings:
             last_reading = recent_readings[0]
@@ -757,7 +792,7 @@ class TemperatureTrackingPlugin:
                 try:
                     timestamp = datetime.fromisoformat(timestamp_str)
                     age_seconds = (datetime.now(timezone.utc) - timestamp).total_seconds()
-                    if age_seconds < 15 * 60:  # less than 15 minutes old
+                    if age_seconds < stale_after_seconds:
                         self._forward_secondary_reading_if_needed(secondary_sensor['mac_address'], last_reading, host)
                 except Exception:
                     pass

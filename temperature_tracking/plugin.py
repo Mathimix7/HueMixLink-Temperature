@@ -354,7 +354,9 @@ class TemperatureTrackingPlugin:
         
         was_known_sensor = self._find_sensor_by_id(source_mac)
         if not was_known_sensor or was_known_sensor.get('state', 'unknown') != 'paired':
-            self._request_sensor_hello(host, source_mac, sender_ip)
+            # Never send legacy v1 PKT_PAIR_CONFIRM to a v2-authenticated sensor
+            if payload.get('protocol_version', 1) == 1:
+                self._request_sensor_hello(host, source_mac, sender_ip)
 
         if packet_type == TEMPERATURE_PACKET_TYPE:
             self._handle_temperature_reading(source_mac, packet_payload, sender_ip, gateway_radio_mac, host)
@@ -375,8 +377,19 @@ class TemperatureTrackingPlugin:
             server_time = int(datetime.now(timezone.utc).timestamp())
             tz_offset_seconds = int(datetime.now().astimezone().utcoffset().total_seconds())
             msg_id = network_server.get_message_id()
-            packet = self.encode_time_response(network_server, sensor_mac, server_time, tz_offset_seconds, msg_id)
-            network_server.send_raw_packet_to_device(sensor_mac, packet, wait_for_delivery=True, msg_id=msg_id, gateway_preference=gateway_radio_mac)
+            payload_bytes = struct.pack("<Ii", server_time, tz_offset_seconds)
+            if hasattr(network_server, 'send_packet_to_device'):
+                network_server.send_packet_to_device(
+                    sensor_mac,
+                    PKT_TIME_RESPONSE,
+                    payload_bytes,
+                    wait_for_delivery=True,
+                    msg_id=msg_id,
+                    gateway_preference=gateway_radio_mac,
+                )
+            else:
+                packet = self.encode_time_response(network_server, sensor_mac, server_time, tz_offset_seconds, msg_id)
+                network_server.send_raw_packet_to_device(sensor_mac, packet, wait_for_delivery=True, msg_id=msg_id, gateway_preference=gateway_radio_mac)
             self._log(f'Sent time response to {sensor_mac}: {server_time}')
             
             # Check pending config for all sensors; skip screen mirroring for battery
@@ -612,6 +625,15 @@ class TemperatureTrackingPlugin:
                 except Exception as e:
                     self._log(f'Failed to remove {sensor_mac} from pairing history: {e}')
 
+            # Revoke Security v2 keys (pruning K_ack from gateways while keeping any saved PIN)
+            if self.context and sensor_mac:
+                try:
+                    network_server = self.context.require('network_server')
+                    if hasattr(network_server, 'revoke_device'):
+                        network_server.revoke_device(sensor_mac, keep_pin=True, last_name=sensor.get('name'))
+                except Exception as e:
+                    self._log(f'Failed to revoke v2 keys for {sensor_mac}: {e}')
+
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
@@ -646,12 +668,8 @@ class TemperatureTrackingPlugin:
         except Exception as exc:
             self._log(f'Failed to request HELLO from {sensor_mac}: {exc}')
 
-    def encode_temp_config(self, network_server, target_mac: str, config: dict, msg_id: int = 0) -> bytes:
-        """Encode a temperature device configuration packet."""
-        pkt_type = PKT_TEMP_CONFIG
-        src_mac = b'\x00' * 6
-        tgt_mac = binascii.unhexlify(target_mac.replace(":", ""))
-
+    def _pack_temp_config_payload(self, config: dict) -> bytes:
+        """Pack the 27-byte temperature device configuration payload (used by both v1 and v2)."""
         brightness = config.get('brightness', {})
         day_start = brightness.get('day_start', '07:00')
         try:
@@ -687,7 +705,6 @@ class TemperatureTrackingPlugin:
                     sec_mac_str = secondary_sensor.get('mac_address', '00:00:00:00:00:00')
 
         sec_mac_bytes = binascii.unhexlify(sec_mac_str.replace(':', ''))
-
         report_interval = int(config.get('report_interval_seconds', DEFAULT_REPORT_INTERVAL))
 
         # The mirrored sensor reports on its own schedule, so the display's staleness timeout
@@ -696,8 +713,8 @@ class TemperatureTrackingPlugin:
             self._sensor_report_interval(secondary_sensor) if secondary_sensor else 0
         )
 
-        # Pack everything into payload
-        payload_data = struct.pack(
+        # Pack everything into payload (31 bytes, used by both v1 and v2)
+        return struct.pack(
             "<BBBBBB5sB5s6sII",
             day_h, day_m, day_brightness,
             night_h, night_m, night_brightness,
@@ -706,6 +723,13 @@ class TemperatureTrackingPlugin:
             report_interval,
             sec_report_interval,
         )
+
+    def encode_temp_config(self, network_server, target_mac: str, config: dict, msg_id: int = 0) -> bytes:
+        """Encode a legacy v1 temperature device configuration packet."""
+        pkt_type = PKT_TEMP_CONFIG
+        src_mac = b'\x00' * 6
+        tgt_mac = binascii.unhexlify(target_mac.replace(":", ""))
+        payload_data = self._pack_temp_config_payload(config)
 
         # Pad to 185 bytes
         payload = payload_data + b'\x00' * (185 - len(payload_data))
@@ -738,10 +762,21 @@ class TemperatureTrackingPlugin:
 
         try:
             msg_id = network_server.get_message_id()
-            packet = self.encode_temp_config(network_server, sensor_mac, config, msg_id)
             sensor = self._find_sensor_by_id(sensor_mac)
             last_gateway = sensor.get('last_seen_gateway') if sensor else None
-            success = network_server.send_raw_packet_to_device(sensor_mac, packet, wait_for_delivery=True, msg_id=msg_id, gateway_preference=last_gateway)
+            if hasattr(network_server, 'send_packet_to_device'):
+                payload_bytes = self._pack_temp_config_payload(config)
+                success = network_server.send_packet_to_device(
+                    sensor_mac,
+                    PKT_TEMP_CONFIG,
+                    payload_bytes,
+                    wait_for_delivery=True,
+                    msg_id=msg_id,
+                    gateway_preference=last_gateway,
+                )
+            else:
+                packet = self.encode_temp_config(network_server, sensor_mac, config, msg_id)
+                success = network_server.send_raw_packet_to_device(sensor_mac, packet, wait_for_delivery=True, msg_id=msg_id, gateway_preference=last_gateway)
             if success:
                 self._storage.update_sensor(sensor_mac, config_pending=0)
                 self._forward_secondary_reading_on_startup(sensor_mac, host)
@@ -834,16 +869,25 @@ class TemperatureTrackingPlugin:
                 battery_percentage = 255
 
             payload_data = struct.pack("<hHB", temp_x10, humidity_x10, battery_percentage)
-            payload = payload_data + b'\x00' * (185 - len(payload_data))
-            signature = network_server.encoder._calculate_hash(payload)
-
             msg_id = network_server.get_message_id()
-            packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
 
             sensor = self._find_sensor_by_id(target_mac)
             last_gateway = sensor.get('last_seen_gateway') if sensor else None
 
-            network_server.send_raw_packet_to_device(target_mac, packet, wait_for_delivery=True, msg_id=msg_id, gateway_preference=last_gateway)
+            if hasattr(network_server, 'send_packet_to_device'):
+                network_server.send_packet_to_device(
+                    target_mac,
+                    PKT_TEMP_SECONDARY,
+                    payload_data,
+                    wait_for_delivery=True,
+                    msg_id=msg_id,
+                    gateway_preference=last_gateway,
+                )
+            else:
+                payload = payload_data + b'\x00' * (185 - len(payload_data))
+                signature = network_server.encoder._calculate_hash(payload)
+                packet = struct.pack("<BI", pkt_type, signature) + src_mac + tgt_mac + struct.pack("<B", msg_id) + payload
+                network_server.send_raw_packet_to_device(target_mac, packet, wait_for_delivery=True, msg_id=msg_id, gateway_preference=last_gateway)
             self._log(f"Forwarded secondary reading from {reading['sensor_mac']} to {target_mac}")
         except Exception as exc:
             self._log(f"Failed to forward secondary reading to {target_mac}: {exc}")

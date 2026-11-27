@@ -4,6 +4,7 @@
 */
 
 #include "HueMixLink.h"
+#include "sec_device.h"
 #include <Preferences.h>
 #include <WiFi.h>
 #include <Wire.h>
@@ -74,6 +75,8 @@ Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
 uint32_t HOME_ID = 0;
 Payload_GatewayList gateways;
+SecPairingState secState;
+SecCounter secCounter;
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 esp_now_peer_info_t peerInfo;
 esp_adc_cal_characteristics_t adc_chars_battery;
@@ -245,19 +248,19 @@ static void updateGatewayList(const Payload_GatewayList *newList) {
 // PACKET SENDING
 // ============================================================
 
-static bool sendPacketToTarget(const uint8_t *targetMac, HueMixLinkPacket &pkt) {
+static bool sendRawToTarget(const uint8_t *targetMac, const uint8_t *data, size_t len) {
   ensurePeer(targetMac);
-  return esp_now_send(targetMac, reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt)) == ESP_OK;
+  return esp_now_send(targetMac, data, len) == ESP_OK;
 }
 
-static bool sendPacketToGateways(HueMixLinkPacket &pkt) {
+static bool sendRawToGateways(const uint8_t *data, size_t len, uint8_t pktType) {
   if (gateways.count == 0) {
-    Serial.printf("[TEMP-OLED] No gateways for packet 0x%02X\n", pkt.type);
+    Serial.printf("[TEMP-BATTERY] No gateways for packet 0x%02X\n", pktType);
     return false;
   }
 
   for (int i = 0; i < gateways.count; i++) {
-    if (sendPacketToTarget(gateways.macs[i], pkt)) {
+    if (sendRawToTarget(gateways.macs[i], data, len)) {
       if (i > 0) {
         uint8_t tempMac[6];
         memcpy(tempMac, gateways.macs[i], 6);
@@ -269,19 +272,23 @@ static bool sendPacketToGateways(HueMixLinkPacket &pkt) {
     }
   }
 
-  Serial.printf("[TEMP-OLED] Failed to queue packet 0x%02X to any gateway\n", pkt.type);
+  Serial.printf("[TEMP-BATTERY] Failed to queue packet 0x%02X to any gateway\n", pktType);
   return false;
 }
 
-static bool sendPacketToGatewaysWithAck(HueMixLinkPacket &pkt) {
+static bool sendPacketToGateways(HueMixLinkPacket &pkt) {
+  return sendRawToGateways(reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt), pkt.type);
+}
+
+static bool sendRawToGatewaysWithAck(const uint8_t *data, size_t len, uint8_t pktType) {
   if (gateways.count == 0) {
-    Serial.printf("[TEMP-BATTERY][ACK] No gateways for packet 0x%02X\n", pkt.type);
+    Serial.printf("[TEMP-BATTERY][ACK] No gateways for packet 0x%02X\n", pktType);
     return false;
   }
 
   ackReceived = false;
   int successfulGatewayIndex = -1;
-  Serial.printf("[TEMP-BATTERY][ACK] Sending packet 0x%02X to %d gateway(s)\n", pkt.type, gateways.count);
+  Serial.printf("[TEMP-BATTERY][ACK] Sending packet 0x%02X (%u B) to %d gateway(s)\n", pktType, (unsigned)len, gateways.count);
 
   for (int i = 0; i < gateways.count; i++) {
     Serial.printf("[TEMP-BATTERY][ACK] Attempt %d/%d via %02X:%02X:%02X:%02X:%02X:%02X\n",
@@ -290,7 +297,7 @@ static bool sendPacketToGatewaysWithAck(HueMixLinkPacket &pkt) {
                   gateways.macs[i][3], gateways.macs[i][4], gateways.macs[i][5]);
 
     ensurePeer(gateways.macs[i]);
-    esp_err_t sendResult = esp_now_send(gateways.macs[i], reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
+    esp_err_t sendResult = esp_now_send(gateways.macs[i], data, len);
     if (sendResult != ESP_OK) {
       Serial.printf("[TEMP-BATTERY][ACK] esp_now_send failed on gateway index %d: %d\n", i, sendResult);
       continue;
@@ -310,7 +317,7 @@ static bool sendPacketToGatewaysWithAck(HueMixLinkPacket &pkt) {
   }
 
   if (successfulGatewayIndex < 0) {
-    Serial.printf("[TEMP-BATTERY][ACK] Packet 0x%02X not acknowledged\n", pkt.type);
+    Serial.printf("[TEMP-BATTERY][ACK] Packet 0x%02X not acknowledged\n", pktType);
     return false;
   }
 
@@ -326,6 +333,29 @@ static bool sendPacketToGatewaysWithAck(HueMixLinkPacket &pkt) {
   }
 
   return true;
+}
+
+static bool sendDualToGateways(uint8_t pktType, const uint8_t *pt, size_t ptLen, HueMixLinkPacket &v1Fallback, bool withAck) {
+  if (sec_device_is_v2(&secState)) {
+    uint8_t myMac[6];
+    WiFi.macAddress(myMac);
+    const uint8_t backendMac[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t v2Buf[256];
+    size_t v2Len = sec_device_encode_tx(
+        &secState, &secCounter, pktType, myMac, backendMac, 0,
+        pt, ptLen, v2Buf, sizeof(v2Buf)
+    );
+    if (v2Len == 0) {
+      Serial.println("[TEMP-BATTERY] SECURITY_PANIC: counter persistence failed, halting TX");
+      return false;
+    }
+    return withAck
+        ? sendRawToGatewaysWithAck(v2Buf, v2Len, pktType)
+        : sendRawToGateways(v2Buf, v2Len, pktType);
+  }
+  return withAck
+      ? sendRawToGatewaysWithAck(reinterpret_cast<const uint8_t *>(&v1Fallback), sizeof(v1Fallback), pktType)
+      : sendPacketToGateways(v1Fallback);
 }
 
 // ============================================================
@@ -384,6 +414,17 @@ static void fillHelloPacket(HueMixLinkPacket &pkt) {
   pkt.payload.raw[20] = minor;
   pkt.payload.raw[21] = patch;
   pkt.payload.raw[22] = 0;
+
+  // Security v2 capability TLV at offset 23 (V2_HELLO_CAP_OFFSETS[DEV_PLUGIN_MARKER])
+  if (!sec_device_is_v2(&secState)) {
+    sec_device_prepare_unpaired_hello(&secState, pkt.payload.raw, 23);
+  } else {
+    uint16_t maxFrame = sec_device_max_frame();
+    pkt.payload.raw[23] = PROTO_VERSION_V2;
+    pkt.payload.raw[24] = (uint8_t)(maxFrame & 0xFF);
+    pkt.payload.raw[25] = (uint8_t)((maxFrame >> 8) & 0xFF);
+  }
+
   pkt.signature = calculateHash(pkt.payload.raw, 185, HOME_ID);
 }
 
@@ -473,7 +514,7 @@ static void handleOtaNotify(HueMixLinkPacket* pkt) {
   Serial.println("[OTA] Ready to receive chunks");
   startLedBreathing();
 
-  // Send OTA_READY response with actual firmware size to confirm readiness
+  // Send OTA_READY response with actual firmware size to confirm readiness (dual-stack v1/v2)
   HueMixLinkPacket ready;
   memset(&ready, 0, sizeof(HueMixLinkPacket));
   ready.type = PKT_OTA_READY;
@@ -483,37 +524,22 @@ static void handleOtaNotify(HueMixLinkPacket* pkt) {
   ready.payload.otaReady.battery_mv = battery_mv;
   ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
 
-  bool sent = false;
-  for (int i = 0; i < gateways.count; i++) {
-    ensurePeer(gateways.macs[i]);
-    if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
-      sent = true;
-      Serial.printf("[OTA] Sent OTA_READY response via gateway %d\n", i);
-      if (i > 0) {
-        uint8_t tempMac[6];
-        memcpy(tempMac, gateways.macs[i], 6);
-        for (int j = i; j > 0; j--) {
-          memcpy(gateways.macs[j], gateways.macs[j-1], 6);
-        }
-        memcpy(gateways.macs[0], tempMac, 6);
-        saveGateways();
-      }
-      break;
-    }
-  }
-
-  if (!sent) {
+  if (sendDualToGateways(
+          PKT_OTA_READY,
+          reinterpret_cast<const uint8_t *>(&ready.payload.otaReady),
+          sizeof(Payload_OtaReady),
+          ready,
+          false)) {
+    Serial.println("[OTA] Sent OTA_READY response");
+  } else {
     Serial.println("[OTA] Failed to send OTA_READY to any gateway");
   }
 }
 
-static void handleOtaChunk(HueMixLinkPacket* pkt) {
+static void handleOtaChunkRaw(uint16_t chunk_idx, const uint8_t* chunk_data, uint16_t data_len) {
   if (otaState != OTA_RECEIVING) return;
 
   last_ota_activity = millis();
-
-  uint16_t chunk_idx = pkt->payload.otaChunk.chunk_index;
-  uint8_t data_len = pkt->payload.otaChunk.data_len;
 
   if (chunk_idx < expected_chunk_index) {
     Serial.printf("[OTA] Ignoring duplicate chunk %d (already at %d)\n", chunk_idx, expected_chunk_index);
@@ -525,14 +551,14 @@ static void handleOtaChunk(HueMixLinkPacket* pkt) {
     return;
   }
 
-  esp_err_t err = esp_ota_write(update_handle, pkt->payload.otaChunk.data, data_len);
+  esp_err_t err = esp_ota_write(update_handle, chunk_data, data_len);
   if (err != ESP_OK) {
     Serial.printf("[OTA] Write failed at chunk %d: %d\n", chunk_idx, err);
     abortOta("Write failed");
     return;
   }
 
-  mbedtls_sha256_update(&sha256_ctx, pkt->payload.otaChunk.data, data_len);
+  mbedtls_sha256_update(&sha256_ctx, chunk_data, data_len);
 
   received_bytes += data_len;
   expected_chunk_index++;
@@ -542,6 +568,10 @@ static void handleOtaChunk(HueMixLinkPacket* pkt) {
       received_bytes, expected_firmware_size,
       (received_bytes * 100.0) / expected_firmware_size);
   }
+}
+
+static void handleOtaChunk(HueMixLinkPacket* pkt) {
+  handleOtaChunkRaw(pkt->payload.otaChunk.chunk_index, pkt->payload.otaChunk.data, pkt->payload.otaChunk.data_len);
 }
 
 static void handleOtaComplete(HueMixLinkPacket* pkt) {
@@ -605,39 +635,182 @@ static void handleOtaCheckpointReq(HueMixLinkPacket* pkt) {
   ack.payload.otaChunkAck.last_chunk_index = last_chunk;
   ack.signature = calculateHash(ack.payload.raw, 185, HOME_ID);
 
-  for (int i = 0; i < gateways.count; i++) {
-    ensurePeer(gateways.macs[i]);
-    if (esp_now_send(gateways.macs[i], (uint8_t*)&ack, sizeof(ack)) == ESP_OK) {
-      Serial.printf("[OTA] Sent checkpoint ACK via gateway %d: last_chunk=%d\n", i, last_chunk);
-      if (i > 0) {
-        uint8_t tempMac[6];
-        memcpy(tempMac, gateways.macs[i], 6);
-        for (int j = i; j > 0; j--) {
-          memcpy(gateways.macs[j], gateways.macs[j-1], 6);
-        }
-        memcpy(gateways.macs[0], tempMac, 6);
-        saveGateways();
-      }
-      break;
-    }
+  if (sendDualToGateways(
+          PKT_OTA_CHUNK_ACK,
+          reinterpret_cast<const uint8_t *>(&ack.payload.otaChunkAck),
+          sizeof(Payload_OtaChunkAck),
+          ack,
+          false)) {
+    Serial.printf("[OTA] Sent checkpoint ACK: last_chunk=%d\n", last_chunk);
   }
 }
 
 static bool sendHello(bool broadcastIfUnpaired);
 static bool requestTimeSync();
 
+static void applyTimeResponsePayload(const uint8_t *raw, size_t rawLen) {
+  if (rawLen < 8) return;
+  uint32_t epochSeconds = 0;
+  int32_t tzOffsetSeconds = 0;
+
+  memcpy(&epochSeconds, &raw[0], sizeof(epochSeconds));
+  memcpy(&tzOffsetSeconds, &raw[4], sizeof(tzOffsetSeconds));
+
+  if (epochSeconds == 0) {
+    Serial.println("[TEMP-BATTERY] Received invalid epoch in time response");
+    return;
+  }
+
+  int32_t tzHoursWest = -tzOffsetSeconds / 3600;
+  int32_t tzMinutesWest = abs(tzOffsetSeconds % 3600) / 60;
+
+  if (tzMinutesWest == 0) {
+    snprintf(rtc_tzStr, sizeof(rtc_tzStr), "GMT%+d", tzHoursWest);
+  } else {
+    snprintf(rtc_tzStr, sizeof(rtc_tzStr), "GMT%+d:%02d", tzHoursWest, tzMinutesWest);
+  }
+
+  rtc_timeSynced = true;
+  rtc_tzOffsetSeconds = tzOffsetSeconds;
+  rtc_lastMidnightSyncDay = epochSeconds / 86400;
+  rtc_lastSyncEpoch = epochSeconds;
+
+  struct timeval tv = { .tv_sec = (time_t)epochSeconds, .tv_usec = 0 };
+  settimeofday(&tv, NULL);
+
+  setenv("TZ", rtc_tzStr, 1);
+  tzset();
+
+  timeResponseReceived = true;
+  Serial.printf("[TEMP-BATTERY] Time synced: epoch=%u offset=%d (%s)\n", epochSeconds, tzOffsetSeconds, rtc_tzStr);
+}
+
+static void applyTempConfigPayload(const uint8_t *raw, size_t rawLen) {
+  if (rawLen < 27) return;
+  uint32_t interval;
+  memcpy(&interval, &raw[23], sizeof(interval));
+  if (interval >= 60 && interval <= 86400) {
+    rtc_reportIntervalSeconds = interval;
+    prefs.putUInt("rpt_int", rtc_reportIntervalSeconds);
+    Serial.printf("[TEMP-BATTERY] Config received: report interval set to %u seconds (%u min)\n", interval, interval / 60);
+  } else if (interval > 0) {
+    Serial.printf("[TEMP-BATTERY] Config received but interval %u out of range (60-86400), ignoring\n", interval);
+  } else {
+    Serial.println("[TEMP-BATTERY] Config received with no interval change (0 = keep current)");
+  }
+}
+
 // ============================================================
 // ESP-NOW RECEIVE CALLBACK
 // ============================================================
 
 void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-  if (len != sizeof(HueMixLinkPacket)) return;
+  const uint8_t *mac = info->src_addr;
+
+  // Variable-length Security v2 frame (never 203 B)
+  if (len != (int)sizeof(HueMixLinkPacket)) {
+    uint8_t myMac[6];
+    WiFi.macAddress(myMac);
+    HueMixLinkHeaderV2 hdr;
+    static uint8_t pt[1440];
+    size_t ptLen = 0;
+    uint32_t newHomeId = 0;
+    uint8_t ackBuf[96];
+    size_t ackLen = 0;
+
+    SecRxResult rx = sec_device_handle_rx_v2(
+        &secState, &secCounter, myMac, data, (size_t)len,
+        &hdr, pt, sizeof(pt), &ptLen, &newHomeId,
+        ackBuf, sizeof(ackBuf), &ackLen
+    );
+    if (rx == SEC_RX_PAIRED_V2) {
+      if (newHomeId != 0 && newHomeId != HOME_ID) {
+        HOME_ID = newHomeId;
+        prefs.putUInt("hid", HOME_ID);
+      }
+      addGateway(mac);
+      ensurePeer(mac);
+      esp_now_send(mac, ackBuf, ackLen);
+      pairingConfirmed = true;
+      Serial.printf("[TEMP-BATTERY] PAIRED v2! HOME_ID=0x%08X epoch=%u\n", HOME_ID, secState.key_epoch);
+      return;
+    }
+    if (rx != SEC_RX_DATA_V2) {
+      return;
+    }
+
+    if (hdr.type == PKT_ACK_TO_BTN) {
+      if (ptLen >= sizeof(Payload_GatewayList)) {
+        Payload_GatewayList gwList;
+        memcpy(&gwList, pt, sizeof(gwList));
+        if (gwList.count > 0) {
+          updateGatewayList(&gwList);
+        }
+      }
+      ackReceived = true;
+    } else if (hdr.type == PKT_GW_LIST_UPD) {
+      if (ptLen >= sizeof(Payload_GatewayList)) {
+        Payload_GatewayList gwList;
+        memcpy(&gwList, pt, sizeof(gwList));
+        if (gwList.count > 0) {
+          updateGatewayList(&gwList);
+        }
+      }
+    } else if (hdr.type == PKT_TIME_RESPONSE) {
+      applyTimeResponsePayload(pt, ptLen);
+    } else if (hdr.type == PKT_TEMP_CONFIG) {
+      applyTempConfigPayload(pt, ptLen);
+    } else if (hdr.type == PKT_SYS_CMD) {
+      uint8_t rspBuf[96];
+      size_t rspLen = 0;
+      if (sec_device_handle_set_pin_cmd(&secState, &secCounter, myMac, pt, ptLen, rspBuf, sizeof(rspBuf), &rspLen)) {
+        sendRawToGateways(rspBuf, rspLen, PKT_SYS_CMD);
+        Serial.println("[TEMP-BATTERY] Processed v2 CMD_SET_PIN and sent ACK");
+      }
+    } else if (hdr.type == PKT_OTA_NOTIFY) {
+      // Allow wake-triggered v2 auto-OTA even if not manually double-tapped
+      if (otaState == OTA_IDLE) {
+        ota_mode = true;
+        otaState = OTA_WAITING_NOTIFY;
+        ota_wake_time = millis();
+        last_ota_activity = millis();
+      }
+      HueMixLinkPacket synth;
+      memset(&synth, 0, sizeof(synth));
+      synth.type = PKT_OTA_NOTIFY;
+      size_t cp = (ptLen > sizeof(synth.payload.raw)) ? sizeof(synth.payload.raw) : ptLen;
+      memcpy(synth.payload.raw, pt, cp);
+      handleOtaNotify(&synth);
+    } else if (hdr.type == PKT_OTA_CHUNK && ptLen >= sizeof(Payload_OtaChunkV2Header)) {
+      Payload_OtaChunkV2Header ch;
+      memcpy(&ch, pt, sizeof(ch));
+      if (sizeof(ch) + ch.data_len <= ptLen) {
+        handleOtaChunkRaw(ch.chunk_index, pt + sizeof(ch), ch.data_len);
+      }
+    } else if (hdr.type == PKT_OTA_CHECKPOINT_REQ) {
+      handleOtaCheckpointReq(nullptr);
+    } else if (hdr.type == PKT_OTA_COMPLETE) {
+      handleOtaComplete(nullptr);
+    } else if (hdr.type == PKT_OTA_ABORT) {
+      handleOtaAbort(nullptr);
+    }
+    return;
+  }
+
+  // Legacy v1 203-byte frame: reject once v2-paired (anti-downgrade)
+  if (sec_device_is_v2(&secState)) {
+    Serial.printf("[TEMP-BATTERY] SECURITY: Rejected legacy v1 packet (type=0x%02X) while v2-paired\n", data[0]);
+    return;
+  }
 
   HueMixLinkPacket pkt;
   memcpy(&pkt, data, sizeof(pkt));
-  const uint8_t *mac = info->src_addr;
 
   if (pkt.type == PKT_PAIR_CONFIRM) {
+    if (!sec_pairing_allow_v1_confirm(&secState)) {
+      Serial.println("[TEMP-BATTERY] SECURITY: Rejected v1 PKT_PAIR_CONFIRM (PIN/v2 device)");
+      return;
+    }
     const uint32_t sig = calculateHash(pkt.payload.raw, 185, 0);
     if (pkt.signature != sig) {
       Serial.println("[TEMP-BATTERY] Rejected pair confirm with invalid signature");
@@ -655,6 +828,13 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
       requestTimeSync();
     }
     addGateway(mac);
+  } else if (pkt.type == PKT_SYS_CMD) {
+    if (HOME_ID != 0 && pkt.signature == calculateHash(pkt.payload.raw, 185, HOME_ID)) {
+      if (pkt.payload.sys.cmd == CMD_UPGRADE_TO_V2 && !sec_device_is_v2(&secState)) {
+        Serial.println("[TEMP-BATTERY] Received CMD_UPGRADE_TO_V2 - sending v2 capability HELLO");
+        sendHello(false);
+      }
+    }
   } else if (pkt.type == PKT_TIME_RESPONSE) {
     if (HOME_ID != 0) {
       uint32_t expectedSig = calculateHash(pkt.payload.raw, 185, HOME_ID);
@@ -663,40 +843,7 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
         return;
       }
     }
-
-    uint32_t epochSeconds = 0;
-    int32_t tzOffsetSeconds = 0;
-
-    memcpy(&epochSeconds, &pkt.payload.raw[0], sizeof(epochSeconds));
-    memcpy(&tzOffsetSeconds, &pkt.payload.raw[4], sizeof(tzOffsetSeconds));
-
-    if (epochSeconds == 0) {
-      Serial.println("[TEMP-BATTERY] Received invalid epoch in time response");
-      return;
-    }
-
-    int32_t tzHoursWest = -tzOffsetSeconds / 3600;
-    int32_t tzMinutesWest = abs(tzOffsetSeconds % 3600) / 60;
-
-    if (tzMinutesWest == 0) {
-      snprintf(rtc_tzStr, sizeof(rtc_tzStr), "GMT%+d", tzHoursWest);
-    } else {
-      snprintf(rtc_tzStr, sizeof(rtc_tzStr), "GMT%+d:%02d", tzHoursWest, tzMinutesWest);
-    }
-
-    rtc_timeSynced = true;
-    rtc_tzOffsetSeconds = tzOffsetSeconds;
-    rtc_lastMidnightSyncDay = epochSeconds / 86400;
-    rtc_lastSyncEpoch = epochSeconds;
-
-    struct timeval tv = { .tv_sec = (time_t)epochSeconds, .tv_usec = 0 };
-    settimeofday(&tv, NULL);
-
-    setenv("TZ", rtc_tzStr, 1);
-    tzset();
-
-    timeResponseReceived = true;
-    Serial.printf("[TEMP-BATTERY] Time synced: epoch=%u offset=%d (%s)\n", epochSeconds, tzOffsetSeconds, rtc_tzStr);
+    applyTimeResponsePayload(pkt.payload.raw, sizeof(pkt.payload.raw));
   } else if (pkt.type == PKT_ACK_TO_BTN) {
     Serial.printf("[TEMP-BATTERY][ACK] Received PKT_ACK_TO_BTN from %02X:%02X:%02X:%02X:%02X:%02X\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -730,19 +877,7 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
         return;
       }
     }
-
-    // Read report interval from bytes 23-26 (uint32 LE, after display config fields)
-    uint32_t interval;
-    memcpy(&interval, &pkt.payload.raw[23], sizeof(interval));
-    if (interval >= 60 && interval <= 86400) {
-      rtc_reportIntervalSeconds = interval;
-      prefs.putUInt("rpt_int", rtc_reportIntervalSeconds);
-      Serial.printf("[TEMP-BATTERY] Config received: report interval set to %u seconds (%u min)\n", interval, interval / 60);
-    } else if (interval > 0) {
-      Serial.printf("[TEMP-BATTERY] Config received but interval %u out of range (60-86400), ignoring\n", interval);
-    } else {
-      Serial.println("[TEMP-BATTERY] Config received with no interval change (0 = keep current)");
-    }
+    applyTempConfigPayload(pkt.payload.raw, sizeof(pkt.payload.raw));
   }
 
   // OTA packet handling - verify signatures first
@@ -780,7 +915,8 @@ static bool requestTimeSync() {
   fillTimeRequestPacket(pkt);
   Serial.println("[TEMP-BATTERY] Sending time request");
   timeResponseReceived = false;
-  return sendPacketToGatewaysWithAck(pkt);
+  uint8_t dummy = 0;
+  return sendDualToGateways(PKT_TIME_REQUEST, &dummy, 1, pkt, true);
 }
 
 static bool sendHello(bool broadcastIfUnpaired) {
@@ -802,7 +938,7 @@ static bool sendTemperatureReading() {
   fillTemperaturePacket(pkt, currentTempC, currentHumidityPct);
 
   Serial.printf("[TEMP-BATTERY] Reporting %.1fC %.1f%%\n", currentTempC, currentHumidityPct);
-  bool delivered = sendPacketToGatewaysWithAck(pkt);
+  bool delivered = sendDualToGateways(PKT_TEMP_EVENT, pkt.payload.raw, 7, pkt, true);
   Serial.printf("[TEMP-BATTERY][ACK] Temperature packet %s\n", delivered ? "delivered" : "not acknowledged");
   return delivered;
 }
@@ -810,7 +946,7 @@ static bool sendTemperatureReading() {
 static void waitForConfigWindow() {
   unsigned long start = millis();
   Serial.println("[TEMP-BATTERY] Listening for pending config...");
-  while (millis() - start < 2000) {
+  while (millis() - start < 2000 && !ota_mode) {
     delay(10);
   }
   Serial.println("[TEMP-BATTERY] Config window closed");
@@ -823,6 +959,7 @@ static void waitForConfigWindow() {
 static void goToSleep(uint32_t sleepSeconds) {
   Serial.printf("[TEMP-BATTERY] Entering deep sleep for %u seconds...\n", sleepSeconds);
   Serial.flush();
+  sec_counter_prepare_sleep(&secCounter);
 
   digitalWrite(PIN_SENSOR_POWER, HIGH);
   pinMode(PIN_SENSOR_POWER, INPUT);
@@ -838,6 +975,7 @@ static void goToSleep(uint32_t sleepSeconds) {
 static void goToSleepReset() {
   Serial.println("[TEMP-BATTERY] Sleeping until reset button is pressed...");
   Serial.flush();
+  sec_counter_prepare_sleep(&secCounter);
 
   digitalWrite(PIN_SENSOR_POWER, HIGH);
   pinMode(PIN_SENSOR_POWER, INPUT);
@@ -852,6 +990,7 @@ static void goToSleepReset() {
 static void goToDoubleTapWaitSleep() {
   Serial.println("[TEMP-BATTERY] Sleeping briefly, waiting for possible second tap...");
   Serial.flush();
+  sec_counter_prepare_sleep(&secCounter);
 
   digitalWrite(PIN_SENSOR_POWER, HIGH);
   pinMode(PIN_SENSOR_POWER, INPUT);
@@ -878,7 +1017,7 @@ static void enterOtaMode() {
 
   blinkLed(3, 200, 200);
 
-  // Send OTA_READY announcement to gateways
+  // Send OTA_READY announcement to gateways (dual-stack v1/v2)
   HueMixLinkPacket ready;
   memset(&ready, 0, sizeof(HueMixLinkPacket));
   ready.type = PKT_OTA_READY;
@@ -888,26 +1027,14 @@ static void enterOtaMode() {
   ready.payload.otaReady.battery_mv = battery_mv;
   ready.signature = calculateHash(ready.payload.raw, 185, HOME_ID);
 
-  bool sent = false;
-  for (int i = 0; i < gateways.count; i++) {
-    ensurePeer(gateways.macs[i]);
-    if (esp_now_send(gateways.macs[i], (uint8_t*)&ready, sizeof(ready)) == ESP_OK) {
-      sent = true;
-      Serial.printf("[OTA] Sent OTA_READY announcement via gateway %d\n", i);
-      if (i > 0) {
-        uint8_t tempMac[6];
-        memcpy(tempMac, gateways.macs[i], 6);
-        for (int j = i; j > 0; j--) {
-          memcpy(gateways.macs[j], gateways.macs[j-1], 6);
-        }
-        memcpy(gateways.macs[0], tempMac, 6);
-        saveGateways();
-      }
-      break;
-    }
-  }
-
-  if (!sent) {
+  if (sendDualToGateways(
+          PKT_OTA_READY,
+          reinterpret_cast<const uint8_t *>(&ready.payload.otaReady),
+          sizeof(Payload_OtaReady),
+          ready,
+          false)) {
+    Serial.println("[OTA] Sent OTA_READY announcement");
+  } else {
     Serial.println("[OTA] Failed to send OTA_READY to any gateway");
   }
 }
@@ -937,6 +1064,7 @@ uint32_t calculateSleepSeconds() {
 static void factoryReset() {
   Serial.println("[TEMP-BATTERY] Factory reset initiated...");
   blinkLed(10, 50, 50);
+  sec_device_on_factory_reset(&secState);
   prefs.clear();
   HOME_ID = 0;
   gateways.count = 0;
@@ -1015,6 +1143,9 @@ void setup() {
     delay(1000);
     ESP.restart();
   }
+
+  // Initialize Security v2 state BEFORE registering ESP-NOW receive callback
+  sec_device_init(&secState, &secCounter);
 
   esp_now_register_recv_cb(OnDataRecv);
   memset(&peerInfo, 0, sizeof(peerInfo));
